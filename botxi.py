@@ -923,8 +923,10 @@ async def place_order_async(symbol, side, amount, price, exchange_id, retries=3)
         except Exception as e:
             logging.error(f"Error inesperado al colocar la orden {side} para {symbol} en {exchange_id}: {e}")
             await asyncio.sleep(1)
+        finally:
+            await exchange.close()
 
-    return order_status
+        return order_status
 
 # Cancelación de órdenes de compra después de 1 minuto
 async def manage_open_buy_orders(exchange_id, symbol, order_timeout):
