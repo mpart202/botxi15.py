@@ -1,23 +1,18 @@
 import ccxt
-import ccxt.async_support as ccxt
+import ccxt.async_support as ccxt_async
 import time
 import logging
 import pandas as pd
 import joblib
 import asyncio
-import hashlib
-import hmac
-import base64
 import csv
 import os
-import requests
 from datetime import datetime
 import json
 import tkinter as tk
 from tkinter import simpledialog, messagebox
 from tkinter import ttk
 from tkinter import Tk, Button, Label
-import traceback
 import ttkbootstrap as ttk
 from ttkbootstrap.constants import *
 from collections import deque
@@ -30,7 +25,7 @@ from sklearn.model_selection import GridSearchCV
 
 # Configuración del logging para incluir WARNING y ERROR
 logging.basicConfig(
-    level=logging.INFO,  # Registra WARNING y ERROR
+    level=logging.ERROR,  # Registra WARNING y ERROR
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
         logging.FileHandler("bot.log"),  # Guarda logs en un archivo
@@ -51,7 +46,7 @@ symbols_config = []
 csv_filename_template = 'trades.csv'
 commission_rate = 0.001
 
-rate_limiter = asyncio.Semaphore(10)  # Permite hasta 10 solicitudes concurrentes
+rate_limiter = asyncio.Semaphore(10)  # Permite hasta 10 solicitudes concurrentesrate_limiter = asyncio.Semaphore(10)  # Permite hasta 10 solicitudes concurrentes
 
 # Variables necesarias
 exchanges = {}
@@ -77,17 +72,24 @@ def count_pending_sell_orders(exchange_id, symbol):
     return len(pending_sells[exchange_id][symbol])
 
 def deactivate_token_if_needed(exchange_id, symbol):
-    global active_symbols
     pending_sells_count = count_pending_sell_orders(exchange_id, symbol)
     if pending_sells_count >= 4:  # Desactivar si hay 2 o más órdenes de venta pendientes
         active_symbols[exchange_id][symbol] = False
         logging.info(f"Trading detenido para {symbol} en {exchange_id} debido a {pending_sells_count} órdenes de venta pendientes.")
 
 def reactivate_token_if_needed(exchange_id, symbol):
-    global active_symbols
     if count_pending_sell_orders(exchange_id, symbol) < 4:
         active_symbols[exchange_id][symbol] = True
         logging.info(f"Trading reactivado para {symbol} en {exchange_id}.")
+
+def get_active_symbols_and_exchanges():
+    active_symbols_exchanges = {}
+    for exchange_id, exchange_data in exchanges_config.items():
+        if exchange_data.get('active', False):
+            active_symbols_list = [symbol for symbol in exchange_data.get('symbols', []) if active_symbols[exchange_id].get(symbol, True)]
+            if active_symbols_list:
+                active_symbols_exchanges[exchange_id] = active_symbols_list
+    return active_symbols_exchanges
 
 def load_encryption_key():
     # Cargar la clave de cifrado desde el archivo
@@ -107,15 +109,6 @@ cipher_suite = Fernet(encryption_key)
 
 # Archivo cifrado donde se guardará la configuración
 encrypted_config_file = 'config.enc'
-
-def get_active_symbols_and_exchanges():
-    active_symbols_exchanges = {}
-    for exchange_id, exchange_data in exchanges_config.items():
-        if exchange_data.get('active', False):
-            active_symbols_list = [symbol for symbol in exchange_data.get('symbols', []) if active_symbols[exchange_id].get(symbol, True)]
-            if active_symbols_list:
-                active_symbols_exchanges[exchange_id] = active_symbols_list
-    return active_symbols_exchanges
 
 # Cargar configuración cifrada
 def load_encrypted_config():
@@ -140,8 +133,6 @@ def load_encrypted_config():
         for exchange_id in exchanges_config:
             if 'symbols' not in exchanges_config[exchange_id]:
                 exchanges_config[exchange_id]['symbols'] = []
-            if 'uid' not in exchanges_config[exchange_id]:
-                exchanges_config[exchange_id]['uid'] = ""
 
         # Inicialización de estructuras
         initialize_structures()
@@ -177,7 +168,6 @@ def save_encrypted_config():
 def initialize_structures():
     global connection_status, actions_log, daily_trades, market_prices, predicted_prices, open_orders, pending_sells, daily_losses, profit_loss, active_symbols, reactivation_thresholds, exchange_running_status
     connection_status = {exchange_id: 'Disconnected' for exchange_id in exchanges_config.keys()}
-    active_symbols = {exchange_id: {} for exchange_id in exchanges_config.keys()}
     for exchange_id, exchange_data in exchanges_config.items():
         exchange_symbols = exchange_data.get('symbols', [])
         daily_trades[exchange_id] = {symbol: deque(maxlen=1000) for symbol in exchange_symbols}
@@ -187,7 +177,8 @@ def initialize_structures():
         pending_sells[exchange_id] = {symbol: deque(maxlen=100) for symbol in exchange_symbols}
         daily_losses[exchange_id] = {symbol: 0 for symbol in exchange_symbols}
         profit_loss[exchange_id] = {symbol: 0 for symbol in exchange_symbols}
-        active_symbols[exchange_id] = {symbol: True for symbol in exchange_symbols}
+        active_symbols = {exchange_id: {symbol: True for symbol in exchange_data.get('symbols', [])} for
+                          exchange_id, exchange_data in exchanges_config.items()}
         reactivation_thresholds[exchange_id] = {symbol: None for symbol in exchange_symbols}
     exchange_running_status = {exchange_id: False for exchange_id in exchanges_config.keys()}
 
@@ -336,7 +327,6 @@ class BotGUI:
                 "api_key": "",
                 "secret": "",
                 "password": "",
-                "uid": "",  # Agregamos el campo uid
                 "active": True,
                 "symbols": []
             }
@@ -358,27 +348,24 @@ class BotGUI:
         tk.Label(dialog, text="API Key").grid(row=1, column=0)
         tk.Label(dialog, text="Secret Key").grid(row=2, column=0)
         tk.Label(dialog, text="Password").grid(row=3, column=0)
-        tk.Label(dialog, text="UID").grid(row=4, column=0)  # Posición correcta
-        tk.Label(dialog, text="Activo").grid(row=5, column=0)
-        tk.Label(dialog, text="Tokens").grid(row=6, column=0)
+        tk.Label(dialog, text="Activo").grid(row=4, column=0)
+        tk.Label(dialog, text="Tokens").grid(row=5, column=0)  # Nueva línea para los tokens
 
         name_var = tk.StringVar(value=exchange_data['name'])
         api_key_var = tk.StringVar(value=exchange_data['api_key'])
         secret_var = tk.StringVar(value=exchange_data['secret'])
         password_var = tk.StringVar(value=exchange_data['password'])
-        uid_var = tk.StringVar(value=exchange_data.get('uid', ''))
         active_var = tk.BooleanVar(value=exchange_data['active'])
 
         tk.Entry(dialog, textvariable=name_var).grid(row=0, column=1)
         tk.Entry(dialog, textvariable=api_key_var).grid(row=1, column=1)
         tk.Entry(dialog, textvariable=secret_var).grid(row=2, column=1)
         tk.Entry(dialog, textvariable=password_var).grid(row=3, column=1)
-        tk.Entry(dialog, textvariable=uid_var).grid(row=4, column=1)  # Posición correcta
-        tk.Checkbutton(dialog, variable=active_var).grid(row=5, column=1)
+        tk.Checkbutton(dialog, variable=active_var).grid(row=4, column=1)
 
         # Selector de tokens
         token_listbox = tk.Listbox(dialog, selectmode="multiple")
-        token_listbox.grid(row=6, column=1)
+        token_listbox.grid(row=5, column=1)
 
         # Agregar todos los tokens disponibles a la lista
         for token in symbols_config:
@@ -395,7 +382,6 @@ class BotGUI:
                 "api_key": api_key_var.get(),
                 "secret": secret_var.get(),
                 "password": password_var.get(),
-                "uid": uid_var.get(),  # Guardamos el UID
                 "active": active_var.get(),
                 "symbols": [token_listbox.get(i) for i in token_listbox.curselection()]
                 # Guardar los tokens seleccionados
@@ -424,13 +410,13 @@ class BotGUI:
                 return
             token_data = {
                 "symbol": symbol,
-                "spread": 0.02,
-                "take_profit": 0.005,
+                "spread": 0.0,
+                "take_profit": 0.0,
                 "trade_amount": 0.0,
                 "max_orders": 1,
                 "order_timeout": 60,
-                "trailing_stop_distance": 0.0035,
-                "max_daily_loss": 0.10,
+                "trailing_stop_distance": 0.0,
+                "max_daily_loss": 0.0,
                 "exchanges": []  # Nueva lista para almacenar los exchanges asignados
             }
         else:
@@ -588,6 +574,7 @@ class BotGUI:
             logging.error(f"Error al ejecutar el bot: {e}")
         finally:
             await shutdown_bot()
+
 
     async def run_gui(self):
         while True:
@@ -785,7 +772,6 @@ class BotGUI:
         self.master.after(self.update_intervals[update_type], lambda: self.update_cycle(update_type))
 
     async def process_symbol(self, symbol_config, exchange_id):
-        global active_symbols
         exchange = exchanges[exchange_id]
         symbol = symbol_config['symbol']
         logging.info(f"Iniciando procesamiento de {symbol} en {exchange_id}")
@@ -809,143 +795,118 @@ class BotGUI:
             logging.error(f"Error al entrenar el modelo para {symbol} en {exchange_id}: {e}")
             return
 
-        try:
-            while exchange_id in self.running_accounts and exchange_running_status[exchange_id]:
-                try:
-                    if not exchange_running_status[exchange_id]:
-                        logging.info(f"Deteniendo procesamiento para {symbol} en {exchange_id}")
-                        break
+        while exchange_id in self.running_accounts and exchange_running_status[exchange_id]:
+            try:
+                if not exchange_running_status[exchange_id]:
+                    logging.info(f"Deteniendo procesamiento para {symbol} en {exchange_id}")
+                    break
 
-                    deactivate_token_if_needed(exchange_id, symbol)
+                # Verificar si debe desactivar el trading
+                deactivate_token_if_needed(exchange_id, symbol)
 
-                    if not active_symbols[exchange_id][symbol]:
-                        logging.info(f"Símbolo {symbol} no activo en {exchange_id}, esperando reactivación")
-                        await asyncio.sleep(10)
-                        reactivate_token_if_needed(exchange_id, symbol)
-                        continue
-
-                    prices = await get_market_prices_async(exchange_id)
-                    if symbol not in prices:
-                        logging.warning(f"No se pudo obtener el precio para {symbol} en {exchange_id}")
-                        await asyncio.sleep(10)
-                        continue
-
-                    market_price = prices[symbol]
-                    logging.info(f"Precio de mercado para {symbol} en {exchange_id}: {market_price}")
-
-                    ohlcv = await fetch_ohlcv_async(symbol, exchange_id, timeframe='1h', limit=1)
-                    if not ohlcv.empty:
-                        row = ohlcv.iloc[-1]
-                        open, high, low, close, volume = row['open'], row['high'], row['low'], row['close'], row[
-                            'volume']
-                    else:
-                        logging.warning(f"No OHLCV data available for {symbol} on {exchange_id}")
-                        await asyncio.sleep(10)
-                        continue
-
-                    predicted_price = predict_next_price(model, symbol, exchange_id, open, high, low, close, volume)
-                    logging.info(f"Precio predicho para {symbol} en {exchange_id}: {predicted_price}")
-
-                    if predicted_price > market_price and exchange_running_status[exchange_id]:
-                        logging.info(f"Intentando abrir órdenes de compra para {symbol} en {exchange_id}")
-                        for i in range(max_orders - len(open_orders[exchange_id][symbol])):
-                            if not exchange_running_status[exchange_id]:
-                                break
-                            buy_price = market_price * (1 - spread * (i + 1))
-                            order = await place_order_async(symbol, 'buy', trade_amount, buy_price, exchange_id)
-                            if order:
-                                logging.info(f"Orden de compra abierta en {exchange_id} para {symbol}: {order}")
-                            else:
-                                logging.info(f"No se pudo abrir orden de compra en {exchange_id} para {symbol}")
-                            await asyncio.sleep(1)
-
-                    if exchange_running_status[exchange_id]:
-                        await manage_open_buy_orders(exchange_id, symbol, order_timeout)
-
-                    if exchange_running_status[exchange_id]:
-                        await place_sell_orders(exchange_id, symbol, take_profit)
-
-                    if exchange_running_status[exchange_id]:
-                        await manage_trailing_stop(exchange_id, symbol, trailing_stop_distance)
-
-                    daily_loss = calculate_daily_loss(symbol, exchange_id)
-                    if daily_loss > max_daily_loss:
-                        logging.info(
-                            f"Pérdida diaria máxima alcanzada para {symbol} en {exchange_id}, deteniendo operaciones")
-                        active_symbols[exchange_id][symbol] = False
-                        reactivation_thresholds[exchange_id][symbol] = market_price * 1.05
-                        await asyncio.sleep(10)
-                        continue
-
-                    await asyncio.sleep(1)
-                except Exception as e:
-                    logging.error(f"Error en el procesamiento de {symbol} en {exchange_id}: {e}")
+                if not active_symbols[exchange_id][symbol]:
+                    logging.info(f"Símbolo {symbol} no activo en {exchange_id}, esperando reactivación")
                     await asyncio.sleep(10)
+                    # Verificar si puede reactivar el trading
+                    reactivate_token_if_needed(exchange_id, symbol)
+                    continue
 
-        finally:
-            if exchange_id == 'bitmart':
-                await exchange.close()
-            logging.info(f"Procesamiento detenido para {symbol} en {exchange_id}")
+                prices = await get_market_prices_async(exchange_id)
+                market_price = prices.get(symbol)
+                if market_price is None:
+                    logging.warning(f"No se pudo obtener el precio para {symbol} en {exchange_id}")
+                    await asyncio.sleep(10)
+                    continue
 
+                logging.info(f"Precio de mercado para {symbol} en {exchange_id}: {market_price}")
+
+                ohlcv = await fetch_ohlcv_async(symbol, exchange_id, timeframe='1h', limit=1)
+                if not ohlcv.empty:
+                    row = ohlcv.iloc[-1]
+                    open, high, low, close, volume = row['open'], row['high'], row['low'], row['close'], row['volume']
+                else:
+                    logging.warning(f"No OHLCV data available for {symbol} on {exchange_id}")
+                    await asyncio.sleep(10)
+                    continue
+
+                predicted_price = predict_next_price(model, symbol, exchange_id, open, high, low, close, volume)
+                logging.info(f"Precio predicho para {symbol} en {exchange_id}: {predicted_price}")
+
+                if predicted_price > market_price and exchange_running_status[exchange_id]:
+                    logging.info(f"Intentando abrir órdenes de compra para {symbol} en {exchange_id}")
+                    for i in range(max_orders - len(open_orders[exchange_id][symbol])):
+                        if not exchange_running_status[exchange_id]:
+                            break
+                        buy_price = market_price * (1 - spread * (i + 1))
+                        order = await place_order_async(symbol, 'buy', trade_amount, buy_price, exchange_id)
+                        if order:
+                            logging.info(f"Orden de compra abierta en {exchange_id} para {symbol}: {order}")
+                        else:
+                            logging.info(f"No se pudo abrir orden de compra en {exchange_id} para {symbol}")
+                        await asyncio.sleep(1)
+
+                # Manejo de órdenes de compra abiertas
+                if exchange_running_status[exchange_id]:
+                    await manage_open_buy_orders(exchange_id, symbol, order_timeout)
+
+                # Colocación de órdenes de venta
+                if exchange_running_status[exchange_id]:
+                    await place_sell_orders(exchange_id, symbol, take_profit)
+
+                # Colocación de trailing stop
+                if exchange_running_status[exchange_id]:
+                    await manage_trailing_stop(exchange_id, symbol, trailing_stop_distance)
+
+                # Control de pérdidas diarias
+                daily_loss = calculate_daily_loss(symbol, exchange_id)
+                if daily_loss > max_daily_loss:
+                    logging.info(
+                        f"Pérdida diaria máxima alcanzada para {symbol} en {exchange_id}, deteniendo operaciones")
+                    active_symbols[exchange_id][symbol] = False
+                    reactivation_thresholds[exchange_id][symbol] = market_price * 1.05
+                    await asyncio.sleep(10)
+                    continue
+
+                await asyncio.sleep(1)
+            except Exception as e:
+                logging.error(f"Error en el procesamiento de {symbol} en {exchange_id}: {e}")
+                await asyncio.sleep(10)
+
+        logging.info(f"Procesamiento detenido para {symbol} en {exchange_id}")
+
+# Colocación de órdenes de compra
 async def place_order_async(symbol, side, amount, price, exchange_id, retries=3):
-    exchange_params = exchanges_config[exchange_id]['exchange_params']
     if not exchange_running_status[exchange_id]:
         logging.info(f"No se colocará la orden {side} para {symbol} en {exchange_id} porque el exchange está detenido")
         return None
 
-    order_status = None  # Inicializa order_status como None
-
     for attempt in range(retries):
         try:
-            if exchange_id == 'bitmart':
-                exchange = ccxt.bitmart({
-                    'apiKey': exchange_params['apiKey'],
-                    'secret': exchange_params['secret'],
-                    'uid': exchange_params['uid'],
-                    'enableRateLimit': True,
-                })
-
-                # Obtener el tiempo actual del servidor de la exchange
-                timestamp = await exchange.fetch_time()
-
-                # Colocar la orden
-                order = await exchange.create_order(symbol, 'limit', side, amount, price)
-                logging.info(f"Orden {side} para {symbol} en {exchange_id} colocada exitosamente: {order}")
-                order_status = order
-
-                exchange.options['timestamp'] = timestamp
-
-                # Agregar los pasos faltantes de la versión 6
-                trade_record = {
-                    'timestamp': datetime.now().isoformat(),
-                    'exchange': exchange_id,
-                    'symbol': symbol,
-                    'side': side,
-                    'amount': amount,
-                    'price': price,
-                    'order_id': order['id']
-                }
-                daily_trades[exchange_id][symbol].append(trade_record)
-                open_orders[exchange_id][symbol].append(order)
-                save_trade_to_csv(trade_record, exchange_id)
-
-            else:
-                logging.error(f"Exchange {exchange_id} no soportado")
-                return None
-
-        except ccxt.NetworkError as e:
-            logging.error(f"Error de red al colocar la orden {side} para {symbol} en {exchange_id}: {e}")
-            await asyncio.sleep(1)
-        except ccxt.ExchangeError as e:
-            logging.error(f"Error de exchange al colocar la orden {side} para {symbol} en {exchange_id}: {e}")
-            await asyncio.sleep(1)
+            exchange = exchanges[exchange_id]
+            order = await exchange.create_order(symbol, 'limit', side, amount, price)
+            logging.info(f"Orden {side} colocada en {exchange_id}: {order}")
+            trade_record = {
+                'timestamp': datetime.now().isoformat(),
+                'exchange': exchange_id,
+                'symbol': symbol,
+                'side': side,
+                'amount': amount,
+                'price': price,
+                'order_id': order['id']
+            }
+            daily_trades[exchange_id][symbol].append(trade_record)
+            open_orders[exchange_id][symbol].append(order)
+            save_trade_to_csv(trade_record, exchange_id)
+            return order
         except Exception as e:
-            logging.error(f"Error inesperado al colocar la orden {side} para {symbol} en {exchange_id}: {e}")
-            await asyncio.sleep(1)
-        finally:
-            await exchange.close()
-
-        return order_status
+            logging.error(f"Error al colocar la orden {side} para {symbol} en {exchange_id}: {e}")
+            if not exchange_running_status[exchange_id]:
+                logging.info(f"El exchange {exchange_id} ha sido detenido durante el intento de colocar la orden")
+                return None
+            await asyncio.sleep(2 ** attempt)
+    logging.error(
+        f"No se pudo colocar la orden {side} para {symbol} en {exchange_id} después de {retries} intentos")
+    return None
 
 # Cancelación de órdenes de compra después de 1 minuto
 async def manage_open_buy_orders(exchange_id, symbol, order_timeout):
@@ -1000,28 +961,7 @@ async def cancel_pending_buy_orders(exchange_id, symbol, order_timeout):
         if order['side'] == 'buy':  # Verifica que la orden sea de compra
             order_info = await exchanges[exchange_id].fetch_order(order['id'], symbol)
             order_age = current_time - (order_info['timestamp'] / 1000)  # Convierte de ms a s
-
             if order_info['status'] == 'open' and order_age > order_timeout:
-                # Modificación para manejar BitMart
-                if exchange_id == 'bitmart':
-                    server_time = get_bitmart_server_time()
-                    timestamp = str(server_time) if server_time else str(int(time.time() * 1000))
-
-                    path = '/spot/v1/cancel_order'  # Path para la cancelación de órdenes en BitMart
-                    message = f"{timestamp}#{exchanges[exchange_id].apiKey}#{path}"
-
-                    signature = hmac.new(
-                        exchanges[exchange_id].secret.encode('utf-8'),
-                        message.encode('utf-8'),
-                        hashlib.sha256
-                    ).hexdigest()
-
-                    exchanges[exchange_id].headers.update({
-                        'X-BM-TIMESTAMP': timestamp,
-                        'X-BM-SIGN': signature,
-                        'X-BM-APIKEY': exchanges[exchange_id].apiKey,
-                    })
-
                 await cancel_order_async(order['id'], symbol, exchange_id)
                 open_orders[exchange_id][symbol].remove(order)
                 logging.info(f"Orden de compra {order['id']} cancelada en {exchange_id} para {symbol} después de {order_timeout} segundos")
@@ -1056,70 +996,33 @@ async def initialize_exchanges():
             except Exception as e:
                 logging.error(f"Error al inicializar {exchange_id}: {e}")
 
+
 async def initialize_exchange(exchange_id):
     creds = exchanges_config[exchange_id]
     if creds.get('active', False):
         try:
-            exchange_class = getattr(ccxt, creds['name'])
+            exchange_class = getattr(ccxt_async, creds['name'])
             exchange_params = {
                 'apiKey': creds['api_key'],
                 'secret': creds['secret'],
-                'uid': creds['uid'],  # Usando el memo que has guardado en uid
                 'enableRateLimit': True
             }
+            if 'password' in creds:
+                exchange_params['password'] = creds['password']
 
-            exchanges_config[exchange_id]['exchange_params'] = exchange_params
-
-            exchange = exchange_class(exchange_params)
-            exchanges[exchange_id] = exchange
-
-            if exchange_id == 'bitmart':
-                # Obtener el tiempo del servidor de BitMart
-                server_time = get_bitmart_server_time()
-                if server_time:
-                    timestamp = str(server_time)
-                else:
-                    timestamp = str(int(time.time() * 1000))  # Fallback al tiempo local si falla la solicitud
-
-                # Crear el mensaje para firmar utilizando el memo
-                path = '/api/v1/orders'
-                message = f"{timestamp}#{exchange.uid}#{path}"
-
-                # Generar la firma
-                signature = hmac.new(
-                    exchange.secret.encode('utf-8'),
-                    message.encode('utf-8'),
-                    hashlib.sha256
-                ).hexdigest()
-
-                # Asignar los headers correctos
-                exchange.headers = {
-                    'X-BM-TIMESTAMP': timestamp,
-                    'X-BM-SIGN': signature,
-                    'X-BM-APIKEY': exchange.apiKey,
-                }
-
-            # Cargar los mercados y establecer el estado de conexión
-            await exchange.load_markets()
+            exchanges[exchange_id] = exchange_class(exchange_params)
+            await exchanges[exchange_id].load_markets()
             connection_status[exchange_id] = 'Connected'
             logging.info(f"Exchange {exchange_id} conectado exitosamente.")
+
+            # Cargar órdenes pendientes
+            await load_pending_orders(exchange_id)
 
         except Exception as e:
             logging.error(f"Error al inicializar el exchange {exchange_id}: {e}")
             connection_status[exchange_id] = 'Disconnected'
         await asyncio.sleep(1)
 
-def get_bitmart_server_time():
-    try:
-        response = requests.get('https://api-cloud.bitmart.com/system/time', timeout=5)
-        response.raise_for_status()
-        server_time = int(response.json().get('data', {}).get('server_time', 0))
-        if server_time == 0:
-            raise ValueError("Invalid server time received")
-        return server_time
-    except Exception as e:
-        logging.error(f"Error al obtener el tiempo del servidor de BitMart: {e}")
-        return None
 
 async def load_pending_orders(exchange_id):
     exchange = exchanges[exchange_id]
@@ -1212,7 +1115,6 @@ def train_model(data, symbol, exchange_id):
         joblib.dump(best_model, model_filename)
         logging.info(f"Modelo entrenado y guardado en archivo para {symbol} en {exchange_id}")
     return best_model
-
 
 async def get_market_prices_async(exchange_id, retries=5):
     active_symbols_exchanges = get_active_symbols_and_exchanges()
@@ -1331,7 +1233,6 @@ async def main():
     try:
         # Cargar la configuración cifrada antes de iniciar la GUI
         load_encrypted_config()
-        initialize_structures()  # Añade esta línea
         logging.info(f"Configuración cargada. Exchanges configurados: {list(exchanges_config.keys())}")
         logging.info(f"Símbolos configurados: {[s['symbol'] for s in symbols_config]}")
 
