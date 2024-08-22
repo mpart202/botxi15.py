@@ -905,10 +905,29 @@ async def place_order_async(symbol, side, amount, price, exchange_id, retries=3)
                     'enableRateLimit': True,
                 })
 
+                # Obtener el tiempo actual del servidor de la exchange
+                timestamp = await exchange.fetch_time()
+
                 # Colocar la orden
                 order = await exchange.create_order(symbol, 'limit', side, amount, price)
                 logging.info(f"Orden {side} para {symbol} en {exchange_id} colocada exitosamente: {order}")
                 order_status = order
+
+                exchange.options['timestamp'] = timestamp
+
+                # Agregar los pasos faltantes de la versión 6
+                trade_record = {
+                    'timestamp': datetime.now().isoformat(),
+                    'exchange': exchange_id,
+                    'symbol': symbol,
+                    'side': side,
+                    'amount': amount,
+                    'price': price,
+                    'order_id': order['id']
+                }
+                daily_trades[exchange_id][symbol].append(trade_record)
+                open_orders[exchange_id][symbol].append(order)
+                save_trade_to_csv(trade_record, exchange_id)
 
             else:
                 logging.error(f"Exchange {exchange_id} no soportado")
