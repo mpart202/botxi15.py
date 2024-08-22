@@ -17,6 +17,7 @@ import tkinter as tk
 from tkinter import simpledialog, messagebox
 from tkinter import ttk
 from tkinter import Tk, Button, Label
+import traceback
 import ttkbootstrap as ttk
 from ttkbootstrap.constants import *
 from collections import deque
@@ -887,15 +888,24 @@ class BotGUI:
             logging.info(f"Procesamiento detenido para {symbol} en {exchange_id}")
 
 async def place_order_async(symbol, side, amount, price, exchange_id, retries=3):
+    exchange_params = exchanges_config[exchange_id]['exchange_params']
     if not exchange_running_status[exchange_id]:
         logging.info(f"No se colocará la orden {side} para {symbol} en {exchange_id} porque el exchange está detenido")
         return None
+
+    order_status = None  # Inicializa order_status como None
 
     for attempt in range(retries):
         try:
             exchange_params = exchanges_config[exchange_id]
 
             if exchange_id == 'bitmart':
+                try:
+                    exchange_params_bitmart = exchange_params['bitmart']
+                except KeyError:
+                    logging.error(f"La clave 'bitmart' no existe en el diccionario exchange_params para el exchange {exchange_id}")
+                    return None
+
                 # Crear la instancia del exchange con credenciales
                 exchange = ccxt.bitmart({
                     'apiKey': exchange_params['apiKey'],
@@ -962,13 +972,16 @@ async def place_order_async(symbol, side, amount, price, exchange_id, retries=3)
             return order
 
         except Exception as e:
-            logging.error(f"Error al colocar la orden {side} para {symbol} en {exchange_id}: {e}")
+            logging.error(f"Error al colocar la orden {side} para {symbol} en {exchange_id}: {traceback.format_exc()}")
+            if order_status is not None:
+                logging.error(f"Estado de la orden: {order_status}")
             if not exchange_running_status[exchange_id]:
                 logging.info(f"El exchange {exchange_id} ha sido detenido durante el intento de colocar la orden")
                 return None
             await asyncio.sleep(2 ** attempt)
-    logging.error(f"No se pudo colocar la orden {side} para {symbol} en {exchange_id} después de {retries} intentos")
-    return None
+            logging.error(
+                f"No se pudo colocar la orden {side} para {symbol} en {exchange_id} después de {retries} intentos")
+            return None
 
 # Cancelación de órdenes de compra después de 1 minuto
 async def manage_open_buy_orders(exchange_id, symbol, order_timeout):
@@ -1090,6 +1103,8 @@ async def initialize_exchange(exchange_id):
                 'uid': creds['uid'],  # Usando el memo que has guardado en uid
                 'enableRateLimit': True
             }
+
+            exchanges_config[exchange_id]['exchange_params'] = exchange_params
 
             exchange = exchange_class(exchange_params)
             exchanges[exchange_id] = exchange
@@ -1397,4 +1412,6 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
+
 
