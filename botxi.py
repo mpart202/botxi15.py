@@ -898,88 +898,33 @@ async def place_order_async(symbol, side, amount, price, exchange_id, retries=3)
     for attempt in range(retries):
         try:
             if exchange_id == 'bitmart':
-                try:
-                    exchange_params_bitmart = exchange_params['bitmart']
-                except KeyError:
-                    logging.error(f"La clave 'bitmart' no existe en el diccionario exchange_params para el exchange {exchange_id}")
-                    return None
-
-                # Crear la instancia del exchange con credenciales
                 exchange = ccxt.bitmart({
                     'apiKey': exchange_params['apiKey'],
                     'secret': exchange_params['secret'],
                     'uid': exchange_params['uid'],
-                    'password': exchange_params.get('password', ''),
                     'enableRateLimit': True,
                 })
 
-                # Manejo de la firma de BitMart
-                server_time = get_bitmart_server_time()
-                timestamp = str(server_time) if server_time else str(int(time.time() * 1000))
-
-                params = {
-                    "symbol": symbol,
-                    "side": side.upper(),
-                    "type": "LIMIT",
-                    "size": str(amount),
-                    "price": str(price)
-                }
-                body = json.dumps(params)
-
-                path = '/spot/v1/submit_order'
-                message = f"{timestamp}#{exchange.uid}#{path}#{body}"
-
-                signature = hmac.new(
-                    exchange.secret.encode('utf-8'),
-                    message.encode('utf-8'),
-                    hashlib.sha256
-                ).hexdigest()
-
-                exchange.headers.update({
-                    'X-BM-TIMESTAMP': timestamp,
-                    'X-BM-SIGN': signature,
-                    'X-BM-APIKEY': exchange.apiKey,
-                    'Content-Type': 'application/json'
-                })
-
-                response = await exchange.private_post_spot_v1_submit_order(params)
-                order = exchange.parse_order(response)
-            else:
-                # Para otros exchanges, usar el método estándar
-                exchange = ccxt.exchanges[exchange_id]({
-                    'apiKey': exchange_params['apiKey'],
-                    'secret': exchange_params['secret'],
-                    'password': exchange_params.get('password', ''),
-                })
+                # Colocar la orden
                 order = await exchange.create_order(symbol, 'limit', side, amount, price)
+                logging.info(f"Orden {side} para {symbol} en {exchange_id} colocada exitosamente: {order}")
+                order_status = order
 
-            logging.info(f"Orden {side} colocada en {exchange_id}: {order}")
-
-            trade_record = {
-                'timestamp': datetime.now().isoformat(),
-                'exchange': exchange_id,
-                'symbol': symbol,
-                'side': side,
-                'amount': amount,
-                'price': price,
-                'order_id': order['id']
-            }
-            daily_trades[exchange_id][symbol].append(trade_record)
-            open_orders[exchange_id][symbol].append(order)
-            save_trade_to_csv(trade_record, exchange_id)
-            return order
-
-        except Exception as e:
-            logging.error(f"Error al colocar la orden {side} para {symbol} en {exchange_id}: {traceback.format_exc()}")
-            if order_status is not None:
-                logging.error(f"Estado de la orden: {order_status}")
-            if not exchange_running_status[exchange_id]:
-                logging.info(f"El exchange {exchange_id} ha sido detenido durante el intento de colocar la orden")
+            else:
+                logging.error(f"Exchange {exchange_id} no soportado")
                 return None
-            await asyncio.sleep(2 ** attempt)
-            logging.error(
-                f"No se pudo colocar la orden {side} para {symbol} en {exchange_id} después de {retries} intentos")
-            return None
+
+        except ccxt.NetworkError as e:
+            logging.error(f"Error de red al colocar la orden {side} para {symbol} en {exchange_id}: {e}")
+            await asyncio.sleep(1)
+        except ccxt.ExchangeError as e:
+            logging.error(f"Error de exchange al colocar la orden {side} para {symbol} en {exchange_id}: {e}")
+            await asyncio.sleep(1)
+        except Exception as e:
+            logging.error(f"Error inesperado al colocar la orden {side} para {symbol} en {exchange_id}: {e}")
+            await asyncio.sleep(1)
+
+    return order_status
 
 # Cancelación de órdenes de compra después de 1 minuto
 async def manage_open_buy_orders(exchange_id, symbol, order_timeout):
