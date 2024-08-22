@@ -897,8 +897,6 @@ async def place_order_async(symbol, side, amount, price, exchange_id, retries=3)
 
     for attempt in range(retries):
         try:
-            exchange_params = exchanges_config[exchange_id]
-
             if exchange_id == 'bitmart':
                 try:
                     exchange_params_bitmart = exchange_params['bitmart']
@@ -1412,6 +1410,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-
-
 
