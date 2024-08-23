@@ -12,20 +12,17 @@ import json
 import tkinter as tk
 from tkinter import simpledialog, messagebox
 from tkinter import ttk
-from tkinter import Tk, Button, Label
-import ttkbootstrap as ttk
+from ttkbootstrap import Style
 from ttkbootstrap.constants import *
 from collections import deque
 from cryptography.fernet import Fernet, InvalidToken
 from functools import lru_cache
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import train_test_split, GridSearchCV
 from sklearn.ensemble import RandomForestRegressor
-from sklearn.model_selection import GridSearchCV
-
 
 # Configuración del logging para incluir WARNING y ERROR
 logging.basicConfig(
-    level=logging.ERROR,  # Registra WARNING y ERROR
+    level=logging.WARN,  # Registra WARNING y ERROR
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
         logging.FileHandler("bot.log"),  # Guarda logs en un archivo
@@ -46,7 +43,7 @@ symbols_config = []
 csv_filename_template = 'trades.csv'
 commission_rate = 0.001
 
-rate_limiter = asyncio.Semaphore(10)  # Permite hasta 10 solicitudes concurrentesrate_limiter = asyncio.Semaphore(10)  # Permite hasta 10 solicitudes concurrentes
+rate_limiter = asyncio.Semaphore(5)  # Aumentado a 20 solicitudes concurrentes
 
 # Variables necesarias
 exchanges = {}
@@ -62,9 +59,6 @@ profit_loss = {}
 active_symbols = {}
 reactivation_thresholds = {}
 exchange_running_status = {}
-key_file = 'encryption_key.key'
-
-# Ruta del archivo donde se guardará la clave de cifrado
 key_file = 'encryption_key.key'
 
 @lru_cache(maxsize=128)
@@ -170,11 +164,11 @@ def initialize_structures():
     connection_status = {exchange_id: 'Disconnected' for exchange_id in exchanges_config.keys()}
     for exchange_id, exchange_data in exchanges_config.items():
         exchange_symbols = exchange_data.get('symbols', [])
-        daily_trades[exchange_id] = {symbol: deque(maxlen=1000) for symbol in exchange_symbols}
+        daily_trades[exchange_id] = {symbol: deque(maxlen=500) for symbol in exchange_symbols}  # Reducido para mejorar la eficiencia
         market_prices[exchange_id] = {symbol: 0 for symbol in exchange_symbols}
         predicted_prices[exchange_id] = {symbol: 0 for symbol in exchange_symbols}
-        open_orders[exchange_id] = {symbol: deque(maxlen=100) for symbol in exchange_symbols}
-        pending_sells[exchange_id] = {symbol: deque(maxlen=100) for symbol in exchange_symbols}
+        open_orders[exchange_id] = {symbol: deque(maxlen=50) for symbol in exchange_symbols}  # Reducido para mejorar la eficiencia
+        pending_sells[exchange_id] = {symbol: deque(maxlen=50) for symbol in exchange_symbols}  # Reducido para mejorar la eficiencia
         daily_losses[exchange_id] = {symbol: 0 for symbol in exchange_symbols}
         profit_loss[exchange_id] = {symbol: 0 for symbol in exchange_symbols}
         active_symbols = {exchange_id: {symbol: True for symbol in exchange_data.get('symbols', [])} for
@@ -188,7 +182,7 @@ class BotGUI:
         master.title("BOTXI Control Panel")
         master.geometry("1400x900")
 
-        style = ttk.Style("darkly")
+        style = Style("darkly")
 
         self.notebook = ttk.Notebook(master)
         self.notebook.pack(expand=True, fill="both", padx=10, pady=10)
@@ -228,10 +222,9 @@ class BotGUI:
         self.is_running = False
         self.running_accounts = set()
 
-        self.update_interval = 1000  # Actualizar cada 1 segundo
+        self.update_interval = 2000  # Actualizar cada 2 segundos, reducido para mayor eficiencia
         self.master.after(self.update_interval, self.periodic_update)
 
-        # Inicialización de last_update
         self.last_update = {
             'actions': None,
             'orders': None,
@@ -241,10 +234,10 @@ class BotGUI:
         self.current_page = 0
 
         self.update_intervals = {
-            'market_prices': 5000,  # 5 segundos
-            'orders': 10000,        # 10 segundos
-            'balance': 30000,       # 30 segundos
-            'profit_loss': 60000    # 1 minuto
+            'market_prices': 10000,  # 10 segundos
+            'orders': 15000,        # 15 segundos
+            'balance': 60000,       # 1 minuto
+            'profit_loss': 120000    # 2 minutos
         }
         self.start_update_cycles()
 
@@ -410,13 +403,13 @@ class BotGUI:
                 return
             token_data = {
                 "symbol": symbol,
-                "spread": 0.0,
-                "take_profit": 0.0,
+                "spread": 0.002,
+                "take_profit": 0.005,
                 "trade_amount": 0.0,
                 "max_orders": 1,
                 "order_timeout": 60,
-                "trailing_stop_distance": 0.0,
-                "max_daily_loss": 0.0,
+                "trailing_stop_distance": 0.0035,
+                "max_daily_loss": 0.10,
                 "exchanges": []  # Nueva lista para almacenar los exchanges asignados
             }
         else:
@@ -580,7 +573,7 @@ class BotGUI:
         while True:
             self.update_gui()
             self.master.update()
-            await asyncio.sleep(0.1)  # Actualiza cada 100ms
+            await asyncio.sleep(0.2)  # Actualiza cada 200ms
 
     def stop_account(self, exchange_id):
         if exchange_id in self.running_accounts:
@@ -727,6 +720,9 @@ class BotGUI:
                     time_active = current_time - (timestamp / 1000 if timestamp else current_time)
                     amount = order.get('amount')
                     price = order.get('price')
+                    status = order.get('status', '')
+
+                    # Agregar la fila a la tabla
                     self.orders_tree.insert("", "end", values=(
                         exchange_id,
                         order.get('symbol', ''),
@@ -734,9 +730,25 @@ class BotGUI:
                         order.get('side', ''),
                         f"{amount:.8f}" if amount is not None else "N/A",
                         f"{price:.8f}" if price is not None else "N/A",
-                        order.get('status', ''),
+                        status,
                         f"{time_active:.2f} segundos" if timestamp else "N/A"
                     ))
+
+                    # Colorear la fila según el estado
+                    if status and status.lower() == 'open':
+                        self.orders_tree.item(self.orders_tree.get_children()[-1], tags=('open',))
+                    elif status and status.lower() == 'closed':
+                        self.orders_tree.item(self.orders_tree.get_children()[-1], tags=('closed',))
+                    elif status and status.lower() == 'canceled':
+                        self.orders_tree.item(self.orders_tree.get_children()[-1], tags=('canceled',))
+                    else:
+                        self.orders_tree.item(self.orders_tree.get_children()[-1], tags=('unknown',))
+
+        # Configurar los colores para las filas
+        self.orders_tree.tag_configure('open', background='green')
+        self.orders_tree.tag_configure('closed', background='blue')
+        self.orders_tree.tag_configure('canceled', background='coral')
+        self.orders_tree.tag_configure('unknown', background='black')
 
     def get_actions_data(self):
         data = []
@@ -761,7 +773,6 @@ class BotGUI:
             self.update_actions_tab()
 
     def start_update_cycles(self):
-        # Solo llama a los ciclos de actualización que son relevantes para las pestañas actuales
         valid_update_types = ['orders', 'actions']
         for update_type, interval in self.update_intervals.items():
             if update_type in valid_update_types:
@@ -789,7 +800,7 @@ class BotGUI:
             return
 
         try:
-            data = await fetch_ohlcv_async(symbol, exchange_id, timeframe='1h', limit=1000)
+            data = await fetch_ohlcv_async(symbol, exchange_id, timeframe='1h', limit=500)  # Reducido a 500 para mejorar eficiencia
             model = train_model(data, symbol, exchange_id)
         except Exception as e:
             logging.error(f"Error al entrenar el modelo para {symbol} en {exchange_id}: {e}")
@@ -801,13 +812,11 @@ class BotGUI:
                     logging.info(f"Deteniendo procesamiento para {symbol} en {exchange_id}")
                     break
 
-                # Verificar si debe desactivar el trading
                 deactivate_token_if_needed(exchange_id, symbol)
 
                 if not active_symbols[exchange_id][symbol]:
                     logging.info(f"Símbolo {symbol} no activo en {exchange_id}, esperando reactivación")
                     await asyncio.sleep(10)
-                    # Verificar si puede reactivar el trading
                     reactivate_token_if_needed(exchange_id, symbol)
                     continue
 
@@ -845,19 +854,15 @@ class BotGUI:
                             logging.info(f"No se pudo abrir orden de compra en {exchange_id} para {symbol}")
                         await asyncio.sleep(1)
 
-                # Manejo de órdenes de compra abiertas
                 if exchange_running_status[exchange_id]:
                     await manage_open_buy_orders(exchange_id, symbol, order_timeout)
 
-                # Colocación de órdenes de venta
                 if exchange_running_status[exchange_id]:
                     await place_sell_orders(exchange_id, symbol, take_profit)
 
-                # Colocación de trailing stop
                 if exchange_running_status[exchange_id]:
                     await manage_trailing_stop(exchange_id, symbol, trailing_stop_distance)
 
-                # Control de pérdidas diarias
                 daily_loss = calculate_daily_loss(symbol, exchange_id)
                 if daily_loss > max_daily_loss:
                     logging.info(
@@ -874,7 +879,6 @@ class BotGUI:
 
         logging.info(f"Procesamiento detenido para {symbol} en {exchange_id}")
 
-# Colocación de órdenes de compra
 async def place_order_async(symbol, side, amount, price, exchange_id, retries=3):
     if not exchange_running_status[exchange_id]:
         logging.info(f"No se colocará la orden {side} para {symbol} en {exchange_id} porque el exchange está detenido")
@@ -908,13 +912,11 @@ async def place_order_async(symbol, side, amount, price, exchange_id, retries=3)
         f"No se pudo colocar la orden {side} para {symbol} en {exchange_id} después de {retries} intentos")
     return None
 
-# Cancelación de órdenes de compra después de 1 minuto
 async def manage_open_buy_orders(exchange_id, symbol, order_timeout):
     current_time = time.time()
     for order in list(open_orders[exchange_id][symbol]):
         order_info = await exchanges[exchange_id].fetch_order(order['id'], symbol)
         if order_info['status'] == 'closed':
-            # Si la orden está cerrada, la manejamos como antes (se mueve a pending_sells)
             logging.info(f"Orden de compra ejecutada para {symbol} en {exchange_id}: {order_info}")
             daily_trades[exchange_id][symbol].append({
                 'timestamp': datetime.now().isoformat(),
@@ -928,12 +930,9 @@ async def manage_open_buy_orders(exchange_id, symbol, order_timeout):
             open_orders[exchange_id][symbol].remove(order)
         elif order_info['status'] == 'open' and order_info['side'] == 'buy' and current_time - order_info[
             'timestamp'] / 1000 > order_timeout:
-            # Solo cancelamos órdenes de compra abiertas que han excedido el timeout
             await cancel_order_async(order['id'], symbol, exchange_id)
             open_orders[exchange_id][symbol].remove(order)
 
-
-# Colocación de órdenes de venta
 async def place_sell_orders(exchange_id, symbol, take_profit):
     for buy_order in list(pending_sells[exchange_id][symbol]):
         sell_price = buy_order['price'] * (1 + take_profit)
@@ -941,8 +940,6 @@ async def place_sell_orders(exchange_id, symbol, take_profit):
             await place_order_async(symbol, 'sell', buy_order['amount'], sell_price, exchange_id)
             pending_sells[exchange_id][symbol].remove(buy_order)
 
-
-# Colocación de trailing stop
 async def manage_trailing_stop(exchange_id, symbol, trailing_stop_distance):
     for buy_order in list(pending_sells[exchange_id][symbol]):
         trailing_stop_price = buy_order['price'] * (1 + trailing_stop_distance)
@@ -953,14 +950,11 @@ async def manage_trailing_stop(exchange_id, symbol, trailing_stop_distance):
             pending_sells[exchange_id][symbol].remove(buy_order)
 
 async def cancel_pending_buy_orders(exchange_id, symbol, order_timeout):
-    """
-    Cancela las órdenes de compra que han estado pendientes por más de `order_timeout` segundos.
-    """
     current_time = time.time()
     for order in list(open_orders[exchange_id][symbol]):
-        if order['side'] == 'buy':  # Verifica que la orden sea de compra
+        if order['side'] == 'buy':
             order_info = await exchanges[exchange_id].fetch_order(order['id'], symbol)
-            order_age = current_time - (order_info['timestamp'] / 1000)  # Convierte de ms a s
+            order_age = current_time - (order_info['timestamp'] / 1000)
             if order_info['status'] == 'open' and order_age > order_timeout:
                 await cancel_order_async(order['id'], symbol, exchange_id)
                 open_orders[exchange_id][symbol].remove(order)
@@ -986,16 +980,14 @@ async def cancel_account_pending_buys(exchange_id):
     await asyncio.gather(*tasks)
     logging.info(f"Todas las órdenes de compra pendientes han sido canceladas para {exchange_id}")
 
-# Inicializar exchanges y otras tareas de configuración
 async def initialize_exchanges():
     for exchange_id, creds in exchanges_config.items():
         if creds.get('active', False):
             try:
                 await initialize_exchange(exchange_id)
-                logging.info(f"Exchange {exchange_id} inicializado correctamente")
+                logging.warning(f"Exchange {exchange_id} inicializado correctamente")
             except Exception as e:
                 logging.error(f"Error al inicializar {exchange_id}: {e}")
-
 
 async def initialize_exchange(exchange_id):
     creds = exchanges_config[exchange_id]
@@ -1013,16 +1005,14 @@ async def initialize_exchange(exchange_id):
             exchanges[exchange_id] = exchange_class(exchange_params)
             await exchanges[exchange_id].load_markets()
             connection_status[exchange_id] = 'Connected'
-            logging.info(f"Exchange {exchange_id} conectado exitosamente.")
+            logging.warning(f"Exchange {exchange_id} conectado exitosamente.")
 
-            # Cargar órdenes pendientes
             await load_pending_orders(exchange_id)
 
         except Exception as e:
             logging.error(f"Error al inicializar el exchange {exchange_id}: {e}")
             connection_status[exchange_id] = 'Disconnected'
         await asyncio.sleep(1)
-
 
 async def load_pending_orders(exchange_id):
     exchange = exchanges[exchange_id]
@@ -1036,23 +1026,22 @@ async def load_pending_orders(exchange_id):
                     open_orders[exchange_id][symbol].append(order)
 
             pending_sells_count = len(pending_sells[exchange_id][symbol])
-            logging.info(f"Cargadas {pending_sells_count} órdenes de venta pendientes para {symbol} en {exchange_id}")
+            logging.warning(f"Cargadas {pending_sells_count} órdenes de venta pendientes para {symbol} en {exchange_id}")
 
-            # Verificar si necesitamos desactivar el trading para este símbolo
             deactivate_token_if_needed(exchange_id, symbol)
 
         except Exception as e:
             logging.error(f"Error al cargar órdenes pendientes para {symbol} en {exchange_id}: {e}")
 
 async def shutdown_bot():
-    logging.info("Cerrando bot y todas las sesiones de cliente...")
+    logging.warning("Cerrando bot y todas las sesiones de cliente...")
     tasks = []
     for exchange_id, exchange in exchanges.items():
         if exchange:
             tasks.append(exchange.close())
     if tasks:
         await asyncio.gather(*tasks)
-    logging.info("Todas las sesiones de cliente han sido cerradas.")
+    logging.warning("Todas las sesiones de cliente han sido cerradas.")
 
 async def reconnect_exchanges():
     while True:
@@ -1073,7 +1062,7 @@ def validate_data(data):
         raise ValueError("Data is empty or None")
     return True
 
-async def fetch_ohlcv_async(symbol, exchange_id, timeframe='1h', limit=1000, retries=5):
+async def fetch_ohlcv_async(symbol, exchange_id, timeframe='1h', limit=500, retries=5):
     for attempt in range(retries):
         try:
             data = await exchanges[exchange_id].fetch_ohlcv(symbol, timeframe, limit=limit)
@@ -1091,30 +1080,55 @@ async def fetch_ohlcv_async(symbol, exchange_id, timeframe='1h', limit=1000, ret
 
 def train_model(data, symbol, exchange_id):
     model_filename = f'price_prediction_model_{exchange_id}_{symbol.replace("/", "_")}.pkl'
-    try:
-        best_model = joblib.load(model_filename)
-        logging.info(f"Modelo cargado desde el archivo existente para {symbol} en {exchange_id}")
-    except FileNotFoundError:
-        logging.info(f"Archivo de modelo no encontrado para {symbol} en {exchange_id}. Entrenando un nuevo modelo")
-        data['target'] = data['close'].shift(-1)
-        data.dropna(inplace=True)
-        X = data[['open', 'high', 'low', 'close', 'volume']]
-        y = data['target']
-        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+    retrain_interval = 24 * 60 * 60  # Reentrenar cada 24 horas
+    should_retrain = False
 
-        param_grid = {
-            'n_estimators': [50, 100, 200],
-            'max_depth': [None, 10, 20, 30],
-            'min_samples_split': [2, 5, 10]
-        }
-        rf = RandomForestRegressor(random_state=42)
-        grid_search = GridSearchCV(estimator=rf, param_grid=param_grid, cv=3, n_jobs=-1, verbose=0)
-        grid_search.fit(X_train, y_train)
+    if os.path.exists(model_filename):
+        model_age = time.time() - os.path.getmtime(model_filename)
+        if model_age > retrain_interval:
+            logging.warning(f"El modelo para {symbol} en {exchange_id} está desactualizado. Reentrenando...")
+            should_retrain = True
+        else:
+            try:
+                best_model = joblib.load(model_filename)
+                logging.warning(f"Modelo cargado desde el archivo existente para {symbol} en {exchange_id}")
+                return best_model
+            except:
+                logging.warning(f"Error al cargar el modelo existente, intentando reentrenar...")
+                should_retrain = True
+    else:
+        logging.warning(f"Archivo de modelo no encontrado para {symbol} en {exchange_id}. Entrenando un nuevo modelo")
+        should_retrain = True
 
-        best_model = grid_search.best_estimator_
-        joblib.dump(best_model, model_filename)
-        logging.info(f"Modelo entrenado y guardado en archivo para {symbol} en {exchange_id}")
-    return best_model
+    if should_retrain:
+        try:
+            data['target'] = data['close'].shift(-1)
+            data.dropna(inplace=True)
+            X = data[['open', 'high', 'low', 'close', 'volume']]
+            y = data['target']
+            X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+            # Expandiendo el grid para mayor precisión
+            param_grid = {
+                'n_estimators': [100, 200, 300, 400],
+                'max_depth': [None, 10, 20, 30, 40],
+                'min_samples_split': [2, 5, 10, 15],
+                'min_samples_leaf': [1, 2, 4],
+                'bootstrap': [True, False]
+            }
+            rf = RandomForestRegressor(random_state=42)
+            grid_search = GridSearchCV(estimator=rf, param_grid=param_grid, cv=5, n_jobs=-1, verbose=0)
+            grid_search.fit(X_train, y_train)
+
+            best_model = grid_search.best_estimator_
+            joblib.dump(best_model, model_filename)
+            logging.info(f"Modelo entrenado y guardado en archivo para {symbol} en {exchange_id}")
+        except Exception as e:
+            logging.error(f"Error durante el reentrenamiento del modelo para {symbol} en {exchange_id}: {e}")
+            logging.info(f"Continuando con el modelo anterior.")
+
+    return best_model if 'best_model' in locals() else joblib.load(model_filename)
+
 
 async def get_market_prices_async(exchange_id, retries=5):
     active_symbols_exchanges = get_active_symbols_and_exchanges()
@@ -1125,7 +1139,7 @@ async def get_market_prices_async(exchange_id, retries=5):
 
     for attempt in range(retries):
         try:
-            async with rate_limiter:  # Cambia rate_limiter.wait() por async with rate_limiter:
+            async with rate_limiter:
                 tickers = await exchanges[exchange_id].fetch_tickers(symbols)
                 for symbol, ticker in tickers.items():
                     market_prices[exchange_id][symbol] = ticker['last']
@@ -1224,56 +1238,45 @@ def save_trade_to_csv(trade, exchange_id):
         writer.writerow(trade)
 
 def handle_command(command):
-    # Implementa aquí la lógica para manejar los comandos
     logging.info(f"Comando recibido: {command}")
-    # Puedes agregar más lógica aquí según los comandos que quieras manejar
-
 
 async def main():
     try:
-        # Cargar la configuración cifrada antes de iniciar la GUI
         load_encrypted_config()
-        logging.info(f"Configuración cargada. Exchanges configurados: {list(exchanges_config.keys())}")
-        logging.info(f"Símbolos configurados: {[s['symbol'] for s in symbols_config]}")
+        logging.warning(f"Configuración cargada. Exchanges configurados: {list(exchanges_config.keys())}")
+        logging.warning(f"Símbolos configurados: {[s['symbol'] for s in symbols_config]}")
 
-        logging.info(f"Configuración de exchanges:")
+        logging.warning(f"Configuración de exchanges:")
         for exchange_id, exchange_data in exchanges_config.items():
-            logging.info(f"{exchange_id}: {exchange_data}")
+            logging.warning(f"{exchange_id}: {exchange_data}")
 
-        # Inicializar la GUI
         root = tk.Tk()
         gui = BotGUI(root)
 
-        # Inicializar exchanges y otras tareas de configuración
         await initialize_exchanges()
 
-        # Crear una tarea para ejecutar el bot
         bot_task = asyncio.create_task(gui.run_bot())
 
-        # Integrar el bucle de eventos de asyncio con tkinter
         gui_task = asyncio.create_task(gui.run_gui())
 
-        # Esperar a que ambas tareas (GUI y bot) se completen
         await asyncio.gather(gui_task, bot_task)
 
     except KeyboardInterrupt:
-        logging.info("Programa terminado por el usuario")
+        logging.warning("Programa terminado por el usuario")
     except Exception as e:
         logging.error(f"Error inesperado: {e}")
         logging.exception("Traceback completo:")
     finally:
-        logging.info("Iniciando cierre del programa...")
-        await shutdown_bot()  # Cerrar las sesiones de cliente
+        logging.warning("Iniciando cierre del programa...")
+        await shutdown_bot()
 
-        # Cancelar todas las tareas pendientes
         for task in asyncio.all_tasks():
             if task is not asyncio.current_task():
                 task.cancel()
 
-        # Esperar a que todas las tareas se cancelen
         await asyncio.gather(*asyncio.all_tasks(), return_exceptions=True)
 
-        logging.info("Programa terminado completamente")
+        logging.warning("Programa terminado completamente")
 
 if __name__ == "__main__":
     asyncio.run(main())
