@@ -2,6 +2,8 @@
 
 ## Overview
 
+"IMPORTANT: It's a very promising bot, I made it entirely with some artificial intelligences. I don't have any programming knowledge and I already reached my limit of improvement. All corrections and updates will be welcome."
+
 BOTXI is an advanced, automated cryptocurrency trading bot designed to operate across multiple exchanges simultaneously. It utilizes machine learning algorithms to predict price movements and execute trades based on configurable strategies. The bot features a graphical user interface (GUI) for easy management and monitoring of trading activities.
 
 ## Key Features
