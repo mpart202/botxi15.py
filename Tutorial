@@ -1,0 +1,174 @@
+# BOTXI Configuration Tutorial
+
+This tutorial will guide you through the process of setting up and configuring the BOTXI Cryptocurrency Trading Bot. Please follow these steps carefully to ensure proper configuration.
+
+## 1. Initial Setup
+
+1.1. Ensure you have Python 3.7+ installed on your system.
+
+1.2. Install the required dependencies:
+```
+pip install ccxt pandas scikit-learn joblib cryptography ttkbootstrap
+```
+
+1.3. Clone or download the BOTXI repository to your local machine.
+
+1.4. Navigate to the bot's directory in your terminal or command prompt.
+
+## 2. First Run and Encryption Key Generation
+
+2.1. Run the bot for the first time:
+```
+python BOTXI31fix.py
+```
+
+2.2. The bot will automatically generate an encryption key and create an `encryption_key.key` file in the same directory. This key is crucial for securing your configuration, so keep it safe and don't share it.
+
+## 3. Launching the GUI
+
+3.1. The bot's GUI should launch automatically after the first run.
+
+3.2. If it doesn't, run the script again:
+```
+python BOTXI31fix.py
+```
+
+## 4. Adding Exchanges
+
+4.1. In the GUI, navigate to the "Configuration" tab.
+
+4.2. Click on the "Add Exchange" button.
+
+4.3. A dialog box will appear. Enter the following information:
+   - Exchange ID: A unique identifier for this exchange (e.g., "binance_main")
+   - Name: The official name of the exchange as it appears in the CCXT library (e.g., "binance")
+   - API Key: Your exchange API key
+   - Secret: Your exchange API secret
+   - Password: If required by the exchange (leave blank if not needed)
+   - Active: Check this box to enable trading on this exchange
+
+4.4. Select the tokens you want to trade on this exchange from the list provided.
+
+4.5. Click "Save" to add the exchange.
+
+4.6. Repeat this process for each exchange you want to add.
+
+## 5. Configuring Tokens
+
+5.1. In the "Configuration" tab, click on "Add Token" to add a new trading pair.
+
+5.2. Enter the following information for each token:
+   - Symbol: The trading pair in exchange format (e.g., "BTC/USDT")
+   - Spread: The price difference for placing buy orders (e.g., 0.002 for 0.2%)
+   - Take Profit: The profit target for sell orders (e.g., 0.02 for 2%)
+   - Trade Amount: The amount to trade in base currency units
+   - Max Orders: Maximum number of open buy orders allowed
+   - Order Timeout: Time in seconds before cancelling unfilled buy orders
+   - Max Daily Loss: Maximum allowed daily loss as a decimal (e.g., 0.02 for 2%)
+
+5.3. Select the exchanges where you want to trade this token.
+
+5.4. Click "Save" to add the token configuration.
+
+5.5. Repeat for each trading pair you want to configure.
+
+## 6. Editing Existing Configurations
+
+6.1. To edit an exchange configuration:
+   - Select the exchange from the list in the "Configuration" tab
+   - Click "Edit Exchange"
+   - Modify the settings as needed and save
+
+6.2. To edit a token configuration:
+   - Select the token from the list in the "Configuration" tab
+   - Click "Edit Token"
+   - Adjust the parameters as required and save
+
+## 7. Removing Configurations
+
+7.1. To remove an exchange:
+   - Select the exchange from the list
+   - Click "Remove Exchange"
+
+7.2. To remove a token:
+   - Select the token from the list
+   - Click "Remove Token"
+
+## 8. Saving the Configuration
+
+8.1. After making any changes, click the "Save Configuration" button in the "Configuration" tab.
+
+8.2. This will encrypt your configuration and save it to the `config.enc` file.
+
+## 9. Setting Up Logging
+
+9.1. The bot automatically sets up logging to the `bot.log` file.
+
+9.2. You can adjust the logging level in the script if needed (default is WARNING).
+
+## 10. Configuring CSV Export
+
+10.1. The bot will automatically create CSV files for each exchange to record trades.
+
+10.2. The filename template can be adjusted in the configuration if needed.
+
+## 11. Advanced Configuration
+
+11.1. Model Retraining Interval:
+   - Open the `BOTXI31fix.py` file in a text editor
+   - Locate the `train_model` function
+   - Adjust the `retrain_interval` variable (default is 7 days)
+
+11.2. GUI Update Intervals:
+   - Find the `update_intervals` dictionary in the `BotGUI` class
+   - Modify the values (in milliseconds) to change update frequencies
+
+11.3. Rate Limiting:
+   - Locate the `rate_limiter` variable at the top of the script
+   - Adjust the semaphore value to change the rate limit (default is 600 requests)
+
+## 12. Starting the Bot
+
+12.1. Once configuration is complete, you can start the bot:
+   - Click the "Start Bot" button in the main GUI window to start all configured exchanges
+   - Or use the individual "Start [Exchange]" buttons to start specific exchanges
+
+12.2. Monitor the bot's activities in the "Actions" and "Orders" tabs.
+
+## 13. Stopping the Bot
+
+13.1. To stop the bot:
+   - Click the "Stop Bot" button to stop all trading activities
+   - Or use individual "Stop [Exchange]" buttons to stop specific exchanges
+
+13.2. The bot will attempt to cancel all open buy orders when stopped.
+
+## 14. Monitoring and Maintenance
+
+14.1. Regularly check the `bot.log` file for any warnings or errors.
+
+14.2. Review the CSV trade logs to analyze performance.
+
+14.3. Periodically review and adjust your trading parameters based on performance.
+
+## 15. Updating the Bot
+
+15.1. When updates are available:
+   - Backup your `config.enc` and `encryption_key.key` files
+   - Download the latest version of the bot
+   - Replace the old files, keeping your backed-up configuration files
+   - Run the bot and verify that all settings are correct
+
+## 16. Troubleshooting
+
+16.1. If you encounter connection issues:
+   - Check your internet connection
+   - Verify API keys are correct and have the necessary permissions
+   - Look for any error messages in the log file
+
+16.2. If the bot is not trading:
+   - Ensure the exchanges and tokens are marked as active
+   - Check that your account has sufficient balance
+   - Verify that the market conditions meet your configured parameters
+
+Remember, cryptocurrency trading carries significant risks. Always start with small amounts and closely monitor the bot's performance. Regularly review and adjust your strategy as needed.
