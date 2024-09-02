@@ -134,10 +134,6 @@ This bot is for educational and research purposes only. Users are responsible fo
 
 Contributions to improve BOTXI are welcome. Please submit pull requests or open issues for bugs and feature requests.
 
-## License
-
-[Specify your chosen license here]
-
 ---
 
 This README provides a comprehensive overview of the BOTXI trading bot, its features, setup process, and important considerations for users. It's designed to give both technical and non-technical users a clear understanding of the bot's capabilities and how to use it effectively.
